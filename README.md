@@ -29,5 +29,3 @@ L'application peut être packagée en `.exe` avec PyInstaller.
 ## 👤 Auteur
 
 Harold Pascal ATCHEKPE
-
-````
