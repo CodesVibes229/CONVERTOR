@@ -24,7 +24,7 @@ L'application peut être packagée en `.exe` avec PyInstaller.
 
 ## 📸 Aperçu
 
-![alt text](image.png)
+![alt text](image-1.png)
 
 ## 👤 Auteur
 
