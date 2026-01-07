@@ -1,0 +1,7 @@
+pillow
+ttkbootstrap
+python-docx
+fpdf
+pandas
+openpyxl
+tkinterdnd2
