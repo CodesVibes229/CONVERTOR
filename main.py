@@ -1,212 +1,213 @@
-import ttkbootstrap as ttk
-from ttkbootstrap.constants import SUCCESS, INFO, BOTTOM
+import os
+import threading
+import ttkbootstrap as tb
+from ttkbootstrap.constants import *
 from tkinter import filedialog, messagebox
 from tkinterdnd2 import DND_FILES, TkinterDnD
-import threading
-import time
-import os
-import csv
-from datetime import datetime
 
+from config import load_config, save_config
 from converters import (
-    excel_to_csv,
+    images_to_single_pdf,
+    images_to_multiple_pdfs,
     csv_to_excel,
-    word_to_pdf,
-    image_to_pdf,
-    csv_to_pdf
+    excel_to_csv,
+    word_to_pdf
 )
+from history import load_history
 
-HISTORY_FILE = "history.csv"
 
+class ConvertorApp:
 
-class ConverterApp(TkinterDnD.Tk):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Universal Convertor")
+        self.root.geometry("950x620")
 
-        self.style = ttk.Style("flatly")
-        self.title("Convertisseur de documents")
-        self.geometry("700x600")
-        self.resizable(False, False)
+        self.config = load_config()
+        self.files = []
 
-        self.input_file = None
+        self.build_menu()
+        self.build_ui()
 
-        self.create_history_file()
+    # ---------- MENU ----------
+    def build_menu(self):
+        menubar = tb.Menu(self.root)
 
-        # ===== TITRE =====
-        ttk.Label(
-            self,
-            text="Convertisseur de documents",
-            font=("Segoe UI", 16, "bold")
-        ).pack(pady=10)
+        settings = tb.Menu(menubar, tearoff=0)
+        settings.add_command(label="Dossier de sortie", command=self.choose_output_dir)
 
-        # ===== MENU =====
-        ttk.Label(self, text="Type de conversion").pack()
+        history_menu = tb.Menu(menubar, tearoff=0)
+        history_menu.add_command(label="Voir l’historique", command=self.show_history)
 
-        self.conversion_var = ttk.StringVar()
-        self.conversion_menu = ttk.Combobox(
-            self,
-            textvariable=self.conversion_var,
-            state="readonly",
-            width=42
+        menubar.add_cascade(label="Paramètres", menu=settings)
+        menubar.add_cascade(label="Historique", menu=history_menu)
+
+        self.root.config(menu=menubar)
+
+    def choose_output_dir(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.config["output_dir"] = folder
+            save_config(self.config)
+            messagebox.showinfo("Succès", "Dossier de sortie mis à jour")
+
+    # ---------- UI ----------
+    def build_ui(self):
+        main = tb.Frame(self.root, padding=20)
+        main.pack(fill=BOTH, expand=True)
+
+        # --- Drag & Drop Zone ---
+        self.drop_zone = tb.Label(
+            main,
+            text="📂 Glissez-déposez vos fichiers ici\nou cliquez sur “Ajouter des fichiers”",
+            bootstyle="info",
+            anchor=CENTER,
+            padding=40
         )
-        self.conversion_menu["values"] = (
-            "Excel → CSV",
-            "CSV → Excel",
-            "Word → PDF",
-            "Image → PDF",
-            "CSV → PDF"
-        )
-        self.conversion_menu.current(0)
-        self.conversion_menu.pack(pady=10)
-
-        # ===== DRAG & DROP =====
-        self.drop_zone = ttk.Label(
-            self,
-            text="Glissez-déposez un fichier ici\nou cliquez pour sélectionner",
-            relief="ridge",
-            padding=30
-        )
-        self.drop_zone.pack(pady=15, padx=20, fill="x")
+        self.drop_zone.pack(fill=X, pady=15)
 
         self.drop_zone.drop_target_register(DND_FILES)
         self.drop_zone.dnd_bind("<<Drop>>", self.on_drop)
-        self.drop_zone.bind("<Button-1>", self.select_file)
 
-        # ===== BOUTON =====
-        ttk.Button(
-            self,
-            text="Lancer la conversion",
-            bootstyle=SUCCESS,
+        # --- Fichiers sélectionnés ---
+        self.files_label = tb.Label(
+            main,
+            text="Aucun fichier sélectionné",
+            bootstyle="secondary",
+            wraplength=800
+        )
+        self.files_label.pack(pady=10)
+
+        tb.Button(
+            main,
+            text="Ajouter des fichiers",
+            bootstyle="primary",
+            command=self.select_files
+        ).pack(pady=5)
+
+        # --- Mode ---
+        self.mode = tb.StringVar(value="multiple")
+
+        mode_frame = tb.Labelframe(main, text="Mode de conversion")
+        mode_frame.pack(fill=X, pady=10)
+
+        tb.Radiobutton(
+            mode_frame,
+            text="Un PDF par fichier",
+            variable=self.mode,
+            value="multiple"
+        ).pack(anchor=W, padx=10)
+
+        tb.Radiobutton(
+            mode_frame,
+            text="Fusionner en un seul PDF",
+            variable=self.mode,
+            value="single"
+        ).pack(anchor=W, padx=10)
+
+        # --- Progression ---
+        self.progress = tb.Progressbar(main, length=700)
+        self.progress.pack(pady=20)
+
+        tb.Button(
+            main,
+            text="Convertir",
+            bootstyle="success",
             command=self.start_conversion
         ).pack(pady=10)
 
-        # ===== PROGRESS =====
-        self.progress = ttk.Progressbar(
-            self,
-            mode="indeterminate",
-            bootstyle=INFO,
-            length=350
-        )
-        self.progress.pack(pady=10)
-
-        # ===== HISTORIQUE =====
-        ttk.Label(
-            self,
-            text="Historique des conversions",
-            font=("Segoe UI", 12, "bold")
-        ).pack(pady=10)
-
-        self.history_table = ttk.Treeview(
-            self,
-            columns=("date", "type", "file"),
-            show="headings",
-            height=8
-        )
-
-        self.history_table.heading("date", text="Date")
-        self.history_table.heading("type", text="Conversion")
-        self.history_table.heading("file", text="Fichier")
-
-        self.history_table.column("date", width=150)
-        self.history_table.column("type", width=120)
-        self.history_table.column("file", width=300)
-
-        self.history_table.pack(padx=20, fill="x")
-
-        self.load_history()
-
-        # ===== FOOTER =====
-        ttk.Label(
-            self,
-            text="© Convertisseur Tkinter",
-            font=("Segoe UI", 9)
-        ).pack(side=BOTTOM, pady=10)
-
-    # ================= HISTORIQUE =================
-    def create_history_file(self):
-        if not os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["date", "conversion", "file"])
-
-    def add_to_history(self, conversion, filename):
-        date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        with open(HISTORY_FILE, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([date, conversion, filename])
-
-        self.history_table.insert("", "end", values=(date, conversion, filename))
-
-    def load_history(self):
-        self.history_table.delete(*self.history_table.get_children())
-
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                self.history_table.insert(
-                    "",
-                    "end",
-                    values=(row["date"], row["conversion"], row["file"])
-                )
-
-    # ================= DRAG & DROP =================
+    # ---------- DRAG & DROP ----------
     def on_drop(self, event):
-        self.input_file = event.data.strip("{}")
-        self.drop_zone.config(text=os.path.basename(self.input_file))
+        files = self.root.tk.splitlist(event.data)
+        self.files = list(files)
+        self.files_label.config(text="\n".join(self.files))
 
-    def select_file(self, event=None):
-        file_path = filedialog.askopenfilename()
-        if file_path:
-            self.input_file = file_path
-            self.drop_zone.config(text=os.path.basename(file_path))
+    # ---------- LOGIC ----------
+    def select_files(self):
+        self.files = filedialog.askopenfilenames()
+        if self.files:
+            self.files_label.config(text="\n".join(self.files))
 
-    # ================= THREAD =================
+    def update_progress(self, current, total):
+        percent = int((current / total) * 100)
+        self.progress["value"] = percent
+        self.root.update_idletasks()
+
     def start_conversion(self):
-        if not self.input_file:
+        if not self.files:
             messagebox.showerror("Erreur", "Aucun fichier sélectionné")
             return
 
-        self.progress.start(10)
-        threading.Thread(target=self.run_conversion, daemon=True).start()
+        self.progress["value"] = 0
+        threading.Thread(target=self.convert, daemon=True).start()
 
-    # ================= LOGIQUE =================
-    def run_conversion(self):
+    def convert(self):
+        output_dir = self.config["output_dir"]
+        ext = os.path.splitext(self.files[0])[1].lower()
+
         try:
-            conversion = self.conversion_var.get()
-            filename = os.path.basename(self.input_file)
+            if ext in [".jpg", ".jpeg", ".png"]:
+                if self.mode.get() == "single":
+                    images_to_single_pdf(
+                        self.files,
+                        os.path.join(output_dir, "fusion.pdf"),
+                        self.update_progress
+                    )
+                else:
+                    images_to_multiple_pdfs(
+                        self.files,
+                        output_dir,
+                        self.update_progress
+                    )
 
-            if "PDF" in conversion:
-                output_file = filedialog.asksaveasfilename(defaultextension=".pdf")
-            elif "CSV" in conversion:
-                output_file = filedialog.asksaveasfilename(defaultextension=".csv")
+            elif ext == ".csv":
+                csv_to_excel(self.files[0], os.path.join(output_dir, "output.xlsx"))
+
+            elif ext in [".xls", ".xlsx"]:
+                excel_to_csv(self.files[0], os.path.join(output_dir, "output.csv"))
+
+            elif ext == ".docx":
+                word_to_pdf(self.files[0], os.path.join(output_dir, "output.pdf"))
+
             else:
-                output_file = filedialog.asksaveasfilename(defaultextension=".xlsx")
-
-            if not output_file:
+                messagebox.showerror("Erreur", "Format non supporté")
                 return
 
-            time.sleep(0.4)
-
-            if conversion == "Excel → CSV":
-                excel_to_csv(self.input_file, output_file)
-            elif conversion == "CSV → Excel":
-                csv_to_excel(self.input_file, output_file)
-            elif conversion == "Word → PDF":
-                word_to_pdf(self.input_file, output_file)
-            elif conversion == "Image → PDF":
-                image_to_pdf(self.input_file, output_file)
-            elif conversion == "CSV → PDF":
-                csv_to_pdf(self.input_file, output_file)
-
-            self.after(0, lambda: self.add_to_history(conversion, filename))
+            messagebox.showinfo("Succès", "Conversion terminée")
 
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Erreur", str(e)))
-        finally:
-            self.after(0, self.progress.stop)
+            messagebox.showerror("Erreur", str(e))
+
+    # ---------- HISTORIQUE ----------
+    def show_history(self):
+        history = load_history()
+
+        window = tb.Toplevel(self.root)
+        window.title("Historique des conversions")
+        window.geometry("900x400")
+
+        frame = tb.Frame(window, padding=10)
+        frame.pack(fill=BOTH, expand=True)
+
+        columns = ("date", "type", "files", "output")
+        tree = tb.Treeview(frame, columns=columns, show="headings")
+
+        for col in columns:
+            tree.heading(col, text=col.capitalize())
+
+        tree.pack(fill=BOTH, expand=True)
+
+        for entry in history:
+            tree.insert("", END, values=(
+                entry.get("date"),
+                entry.get("type"),
+                entry.get("files"),
+                entry.get("output")
+            ))
 
 
 if __name__ == "__main__":
-    app = ConverterApp()
-    app.mainloop()
+    root = TkinterDnD.Tk()
+    style = tb.Style("flatly")
+    app = ConvertorApp(root)
+    root.mainloop()

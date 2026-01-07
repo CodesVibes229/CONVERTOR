@@ -1,55 +1,86 @@
-import pandas as pd
-from docx2pdf import convert
-from PIL import Image
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
 import os
+from PIL import Image
+from fpdf import FPDF
+import pandas as pd
+from docx import Document
+from history import add_history
 
-# Excel -> CSV
-def excel_to_csv(input_file, output_file):
-    df = pd.read_excel(input_file)
-    df.to_csv(output_file, index=False)
+# ---------- IMAGES ----------
 
-# CSV -> Excel
-def csv_to_excel(input_file, output_file):
-    df = pd.read_csv(input_file)
-    df.to_excel(output_file, index=False)
+def images_to_single_pdf(image_paths, output_path, progress_cb=None):
+    images = []
+    total = len(image_paths)
 
-# Word -> PDF
-def word_to_pdf(input_file, output_file):
-    convert(input_file, output_file)
+    for i, path in enumerate(image_paths, start=1):
+        img = Image.open(path).convert("RGB")
+        images.append(img)
+        if progress_cb:
+            progress_cb(i, total)
 
-# Image -> PDF
-def image_to_pdf(input_file, output_file):
-    # Forcer l'extension PDF
-    if not output_file.lower().endswith(".pdf"):
-        output_file += ".pdf"
+    images[0].save(output_path, save_all=True, append_images=images[1:])
 
-    image = Image.open(input_file)
+    add_history({
+        "type": "Images → PDF (fusion)",
+        "files": len(image_paths),
+        "output": output_path
+    })
 
-    # Convertir en RGB si nécessaire (PNG, RGBA, etc.)
-    if image.mode in ("RGBA", "P"):
-        image = image.convert("RGB")
+def images_to_multiple_pdfs(image_paths, output_dir, progress_cb=None):
+    total = len(image_paths)
 
-    image.save(output_file, "PDF")
+    for i, path in enumerate(image_paths, start=1):
+        img = Image.open(path).convert("RGB")
+        name = os.path.splitext(os.path.basename(path))[0]
+        img.save(os.path.join(output_dir, f"{name}.pdf"))
 
-# CSV -> PDF
-def csv_to_pdf(input_file, output_file):
-    df = pd.read_csv(input_file)
-    c = canvas.Canvas(output_file, pagesize=A4)
-    width, height = A4
-    y = height - 40
+        if progress_cb:
+            progress_cb(i, total)
 
-    for col in df.columns:
-        c.drawString(40, y, col)
-        y -= 20
+    add_history({
+        "type": "Images → PDF (multiple)",
+        "files": len(image_paths),
+        "output": output_dir
+    })
 
-    for _, row in df.iterrows():
-        for item in row:
-            c.drawString(40, y, str(item))
-            y -= 20
-        if y < 40:
-            c.showPage()
-            y = height - 40
+# ---------- CSV / EXCEL ----------
 
-    c.save()
+def csv_to_excel(csv_path, output_path):
+    df = pd.read_csv(csv_path)
+    df.to_excel(output_path, index=False)
+
+    add_history({
+        "type": "CSV → Excel",
+        "files": 1,
+        "output": output_path
+    })
+
+def excel_to_csv(excel_path, output_path):
+    df = pd.read_excel(excel_path)
+    df.to_csv(output_path, index=False)
+
+    add_history({
+        "type": "Excel → CSV",
+        "files": 1,
+        "output": output_path
+    })
+
+# ---------- WORD ----------
+
+def word_to_pdf(word_path, output_path):
+    doc = Document(word_path)
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+
+    for para in doc.paragraphs:
+        text = para.text.encode("latin-1", "ignore").decode("latin-1")
+        pdf.multi_cell(0, 8, text)
+
+    pdf.output(output_path)
+
+    add_history({
+        "type": "Word → PDF",
+        "files": 1,
+        "output": output_path
+    })
+

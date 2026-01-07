@@ -1,8 +1,7 @@
+pillow
+ttkbootstrap
+python-docx
+fpdf
 pandas
 openpyxl
-python-docx
-docx2pdf
-Pillow
-reportlab
-ttkbootstrap
 tkinterdnd2
